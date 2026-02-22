@@ -1,0 +1,28 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Binaries
+yt-dlp.exe
+yt-dlp
+ffmpeg.exe
+ffmpeg
+ffprobe.exe
+ffprobe
+*.zip
+
+# Database
+downloads.db
+
+# Media and temporary files
+downloads/
+*.mp4
+*.webm
+*.mp3
+*.m4a
+!download_favicon.png
