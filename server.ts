@@ -1,6 +1,6 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
@@ -26,6 +26,38 @@ async function startServer() {
   const ytdlpFileName = isWindows ? "yt-dlp.exe" : "yt-dlp";
   const ytdlpPath = path.join(process.cwd(), ytdlpFileName);
   const ffmpegPath = path.join(process.cwd(), isWindows ? "ffmpeg.exe" : "ffmpeg");
+
+  // In-memory job tracking map: jobId -> { status, filePath, fileName, error }
+  const jobs = new Map<string, { status: 'processing' | 'ready' | 'error'; progress?: number; filePath?: string; fileName?: string; error?: string }>();
+
+  // Cleanup downloads directory utility
+  const cleanupDownloadsDir = () => {
+    try {
+      if (fs.existsSync(downloadsDir)) {
+        const files = fs.readdirSync(downloadsDir);
+        const activeFiles = new Set<string>();
+        jobs.forEach(job => {
+          if ((job.status === 'processing' || job.status === 'ready') && job.filePath) {
+            activeFiles.add(path.basename(job.filePath));
+          }
+        });
+
+        for (const file of files) {
+          if (activeFiles.has(file)) continue;
+          const filePath = path.join(downloadsDir, file);
+          if (fs.statSync(filePath).isFile()) {
+            fs.unlinkSync(filePath);
+          }
+        }
+        console.log("Downloads directory cleaned (Active files protected)");
+      }
+    } catch (err: any) {
+      console.error("Error cleaning downloads directory:", err.message);
+    }
+  };
+
+  // Run initial cleanup
+  cleanupDownloadsDir();
 
   // FFmpeg check and install
   try {
@@ -100,7 +132,9 @@ async function startServer() {
   }
 
   // API Routes
-  app.get("/api/health", async (req, res) => {
+  const apiRouter = express.Router();
+
+  apiRouter.get("/health", async (req, res) => {
     try {
       const command = isWindows ? `"${ytdlpPath}" --version` : `${ytdlpPath} --version`;
       const { stdout } = await execPromise(command);
@@ -110,149 +144,194 @@ async function startServer() {
     }
   });
 
-  app.post("/api/metadata", async (req, res) => {
+  apiRouter.post("/metadata", async (req, res) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: "URL is required" });
 
     try {
       console.log(`Fetching metadata for: ${url}`);
-      const commonFlags = `--no-playlist --no-warnings --print-json --ffmpeg-location "${process.cwd()}"`;
-      const command = isWindows
-        ? `"${ytdlpPath}" ${commonFlags} "${url}"`
-        : `${ytdlpPath} ${commonFlags} "${url}"`;
 
-      const { stdout } = await execPromise(command, { env: { ...process.env } });
-      const data = JSON.parse(stdout);
+      let data: any = null;
+      let errorMsg = "";
+
+      try {
+        const commonFlags = `--no-playlist --no-warnings --no-check-certificates --skip-download --dump-single-json`;
+        const command = isWindows ? `"${ytdlpPath}" ${commonFlags} "${url}"` : `${ytdlpPath} ${commonFlags} "${url}"`;
+        const { stdout } = await execPromise(command, { env: { ...process.env } });
+        data = JSON.parse(stdout);
+      } catch (ytError: any) {
+        console.warn("yt-dlp metadata failed, trying OEmbed fallback:", ytError.message);
+        errorMsg = ytError.message;
+      }
+
+      if (!data && (url.includes("youtube.com") || url.includes("youtu.be"))) {
+        try {
+          const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+          const response = await fetch(oembedUrl);
+          if (response.ok) {
+            const oembedData: any = await response.json();
+            data = {
+              title: oembedData.title,
+              uploader: oembedData.author_name,
+              thumbnail: oembedData.thumbnail_url,
+              duration_string: "0:00",
+              filesize_approx: 0,
+              extractor_key: "YouTube (OEmbed)"
+            };
+          }
+        } catch (oembedError: any) {
+          console.error("OEmbed fallback failed:", oembedError.message);
+        }
+      }
+
+      if (!data) throw new Error(errorMsg || "Não foi possível extrair metadados.");
+
+      const formats = data.formats || [];
+      const resolutionsSet = new Set<number>();
+      formats.forEach((f: any) => {
+        const h = parseInt(f.height || f.resolution?.split('x')[1] || "0");
+        if ([720, 1080, 1440, 2160].includes(h)) resolutionsSet.add(h);
+      });
+      if (!resolutionsSet.has(720)) resolutionsSet.add(720);
+      if (!resolutionsSet.has(1080)) resolutionsSet.add(1080);
+      let availableResolutions = Array.from(resolutionsSet).sort((a, b) => b - a);
+
+      const availableExts = Array.from(new Set(
+        formats.filter((f: any) => f.vcodec && f.vcodec !== 'none' && f.ext).map((f: any) => f.ext)
+      ));
 
       res.json({
         title: data.title || "Sem Título",
         channel: data.uploader || data.channel || "Canal Desconhecido",
-        thumbnail: data.thumbnail || (data.thumbnails && data.thumbnails.length > 0 ? data.thumbnails[data.thumbnails.length - 1].url : `https://picsum.photos/seed/${Math.random()}/1280/720`),
+        thumbnail: data.thumbnail || (data.thumbnails && data.thumbnails.length > 0 ? data.thumbnails[data.thumbnails.length - 1].url : ""),
         duration: data.duration_string || "0:00",
         sizeBytes: data.filesize || data.filesize_approx || 0,
         platform: data.extractor_key || "Unknown",
-        original_url: url
+        original_url: url,
+        resolutions: availableResolutions,
+        formats: availableExts.length > 0 ? availableExts : ['mp4', 'mkv', 'webm']
       });
     } catch (error: any) {
-      console.error("Metadata error:", error);
-      res.status(500).json({ error: `Erro ao extrair metadados: ${error.message}` });
+      res.status(500).json({ error: error.message });
     }
   });
 
-  app.post("/api/download", async (req, res) => {
+  apiRouter.post("/process", async (req, res) => {
+    cleanupDownloadsDir(); // SMART CLEANUP
     const { url, format, quality, title } = req.body;
     if (!url) return res.status(400).json({ error: "URL is required" });
 
-    const id = uuidv4();
-    const outputTemplate = path.join(downloadsDir, `${id}.%(ext)s`);
-
-    const commonFlags = `--no-playlist --no-warnings --ffmpeg-location "${process.cwd()}"`;
-    let baseCommand = isWindows
-      ? `"${ytdlpPath}" ${commonFlags} -o "${outputTemplate}" `
-      : `${ytdlpPath} ${commonFlags} -o "${outputTemplate}" `;
-
+    const jobId = uuidv4();
+    const outputTemplate = path.join(downloadsDir, `${jobId}.%(ext)s`);
     const isAudio = format && format.toLowerCase().includes("mp3");
 
+    jobs.set(jobId, { status: 'processing', progress: 0 });
+    res.json({ jobId });
+
+    const args = [
+      "--no-playlist", "--no-warnings", "--no-mtime",
+      "--ffmpeg-location", process.cwd(),
+      "--concurrent-fragments", "10", "--buffer-size", "16M",
+      "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+      "-o", outputTemplate
+    ];
+
     if (isAudio) {
-      baseCommand += `-x --audio-format mp3 --audio-quality 0 `;
+      args.push("-x", "--audio-format", "mp3", "--audio-quality", "0");
     } else {
-      // quality can be like '1080p', '720p', '1080 Full HD', or just 'best'
-      const heightMatch = quality ? String(quality).match(/\d+/) : null;
-      const height = heightMatch ? heightMatch[0] : "1080";
-      baseCommand += `-f "bestvideo[height<=${height}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 `;
+      const height = quality ? String(quality).match(/\d+/)?.[0] || "1080" : "1080";
+      const ext = (format || "mp4").toLowerCase();
+      const formatStr = `best[height<=${height}][ext=mp4][vcodec!=none][acodec!=none]/bestvideo[height<=${height}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${height}]/best`;
+      args.push("-f", formatStr, "--merge-output-format", ext, "--postprocessor-args", "Merger:-c copy");
     }
+    args.push(url);
 
-    baseCommand += `"${url}"`;
-
-    try {
-      console.log(`Executing download: ${baseCommand}`);
-      await execPromise(baseCommand);
-
-      const files = fs.readdirSync(downloadsDir);
-      const fileNameOnDisk = files.find(f => f.startsWith(id));
-
-      if (!fileNameOnDisk) {
-        throw new Error("File not found after download");
+    const child = spawn(ytdlpPath, args);
+    child.stdout.on('data', (data) => {
+      const match = data.toString().match(/(\d+\.\d+)%/);
+      if (match) {
+        const progress = parseFloat(match[1]);
+        const job = jobs.get(jobId);
+        if (job) jobs.set(jobId, { ...job, progress });
       }
+    });
 
-      const filePath = path.join(downloadsDir, fileNameOnDisk);
-
-      const cleanTitle = (title || "video").replace(/[^a-z0-9]/gi, '_').toLowerCase();
-      const resolution = isAudio ? 'audio' : (quality || '1080p');
-      const ext = path.extname(fileNameOnDisk).replace('.', '');
-      const downloadName = `${cleanTitle}-${resolution}.${ext}`;
-
-      res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-      res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
-
-      res.download(filePath, downloadName, (err) => {
-        if (err) {
-          console.error("Download error:", err);
+    child.on('close', (code) => {
+      if (code === 0) {
+        const files = fs.readdirSync(downloadsDir);
+        const file = files.find(f => f.startsWith(jobId));
+        if (file) {
+          const filePath = path.join(downloadsDir, file);
+          jobs.set(jobId, { status: 'ready', progress: 100, filePath, fileName: `${title || 'video'}.${path.extname(file).slice(1)}` });
         }
-        try {
-          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        } catch (e) {
-          console.error("Cleanup error:", e);
-        }
-      });
-    } catch (error: any) {
-      console.error("Download execution error:", error);
-      res.status(500).json({ error: `Erro no download: ${error.message}` });
-    }
+      } else {
+        jobs.set(jobId, { status: 'error', error: `Exit code ${code}` });
+      }
+    });
   });
 
-  // History API Endpoints
-  // Application-level security (RLS-like scoping) is implemented here
-  app.get("/api/history", (req, res) => {
+  apiRouter.get("/process/:jobId", (req, res) => {
+    const job = jobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ status: 'error', error: 'Not found' });
+    res.json({ status: job.status, progress: job.progress || 0, error: job.error });
+  });
+
+  apiRouter.get("/serve/:jobId", (req, res) => {
+    const job = jobs.get(req.params.jobId);
+    if (!job || job.status !== 'ready' || !job.filePath) return res.status(404).json({ error: 'Not ready' });
+
+    res.download(job.filePath, job.fileName!, (err) => {
+      if (!err) {
+        cleanupDownloadsDir(); // Cleanup after successful serve
+        jobs.delete(req.params.jobId);
+      }
+    });
+  });
+
+  apiRouter.get("/history", (req, res) => {
     try {
-      const rows = db.prepare("SELECT * FROM downloads ORDER BY date DESC").all();
-      res.json(rows);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+      res.json(db.prepare("SELECT * FROM downloads ORDER BY date DESC").all());
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
-  app.post("/api/history", (req, res) => {
+  apiRouter.post("/history", (req, res) => {
     const item = req.body;
     try {
-      const stmt = db.prepare(`
-        INSERT OR REPLACE INTO downloads (id, title, url, platform, format, quality, thumbnail, channel, status, progress, size, date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      stmt.run(item.id, item.title, item.url, item.platform, item.format, item.quality, item.thumbnail, item.channel, item.status, item.progress, item.size, item.date);
+      db.prepare(`INSERT OR REPLACE INTO downloads (id, title, url, platform, format, quality, thumbnail, channel, status, progress, size, date, jobId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(item.id, item.title, item.url, item.platform, item.format, item.quality, item.thumbnail, item.channel, item.status, item.progress, item.size, item.date, item.jobId);
       res.json({ success: true });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
-  app.delete("/api/history/:id", (req, res) => {
-    const { id } = req.params;
+  apiRouter.delete("/history/completed", (req, res) => {
     try {
-      db.prepare("DELETE FROM downloads WHERE id = ?").run(id);
+      db.prepare("DELETE FROM downloads WHERE status = 'completed'").run();
       res.json({ success: true });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
+  apiRouter.delete("/history/:id", (req, res) => {
+    try {
+      db.prepare("DELETE FROM downloads WHERE id = ?").run(req.params.id);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.use("/api", apiRouter);
+  app.use("/BD-Downloader/api", apiRouter);
+
+  const distPath = path.join(process.cwd(), "dist");
+  const isProduction = process.env.NODE_ENV === "production" || fs.existsSync(path.join(distPath, "index.html"));
+
+  if (!isProduction) {
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa", base: '/BD-Downloader/' });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static("dist"));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(process.cwd(), "dist", "index.html"));
-    });
+    app.use("/BD-Downloader", express.static(distPath));
+    app.get("/BD-Downloader/*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
+    app.get("/", (req, res) => res.redirect("/BD-Downloader/"));
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  app.listen(PORT, "0.0.0.0", () => console.log(`Server running on http://localhost:${PORT}`));
 }
 
 startServer();

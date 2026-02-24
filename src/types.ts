@@ -12,6 +12,9 @@ export interface DownloadItem {
   progress: number;
   speed?: string;
   date: string;
+  jobId?: string;
+  availableResolutions?: number[];
+  availableFormats?: string[];
 }
 
 export type AppTab = 'downloader' | 'history';

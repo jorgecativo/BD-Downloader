@@ -19,8 +19,16 @@ db.exec(`
     status TEXT,
     progress INTEGER,
     size TEXT,
-    date TEXT
+    date TEXT,
+    jobId TEXT
   )
 `);
+
+// Migration: Add jobId column if it's missing (for existing databases)
+try {
+  db.exec("ALTER TABLE downloads ADD COLUMN jobId TEXT");
+} catch (e) {
+  // Column likely already exists
+}
 
 export default db;
