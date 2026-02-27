@@ -29,6 +29,14 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { DownloadItem, AppTab } from './types';
 
+const formatSize = (bytes: number) => {
+  if (!bytes || bytes === 0) return 'Estimação Indisponível';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
+
 // --- Components ---
 
 const Sidebar = ({ isOpen, onClose, items, onDelete, onDownloadFile }: {
@@ -145,16 +153,16 @@ const Sidebar = ({ isOpen, onClose, items, onDelete, onDownloadFile }: {
 
 const Navbar = ({ onOpenSidebar, hasHistory }: { onOpenSidebar: () => void, hasHistory: boolean }) => (
   <nav className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-200">
-    <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
+    <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
       <div className="flex items-center gap-4">
-        <div className="relative flex items-center justify-center w-10 h-10 bg-red-600 rounded-xl shadow-lg shadow-red-600/20">
-          <Download className="text-white w-6 h-6" />
+        <div className="relative flex items-center justify-center w-8 h-8 bg-red-600 rounded-lg shadow-lg shadow-red-600/20">
+          <Download className="text-white w-5 h-5" />
         </div>
         <div className="flex flex-col">
-          <span className="text-xl font-black tracking-tight text-slate-900 leading-none">BD Downloader</span>
-          <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Premium Tool</span>
-            <span className="text-[10px] font-black text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded">v3.4.0</span>
+          <span className="text-lg font-black tracking-tight text-slate-900 leading-none">BD Downloader</span>
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Versão Paga</span>
+            <span className="text-[9px] font-black text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded">v3.8.0</span>
           </div>
         </div>
       </div>
@@ -185,7 +193,7 @@ const Downloader = ({ onDownload }: { onDownload: (url: string, options: any, me
   const [url, setUrl] = useState('');
   const [mode, setMode] = useState<'video' | 'audio'>('video');
   const [format, setFormat] = useState('MP4');
-  const [quality, setQuality] = useState('1080p Full HD');
+  const [quality, setQuality] = useState('1080p');
   const [playlist, setPlaylist] = useState(false);
   const [metadata, setMetadata] = useState<{ title: string; channel: string; thumbnail: string; duration: string; resolutions: number[]; formats: string[] } | null>(null);
   const [isFetching, setIsFetching] = useState(false);
@@ -224,7 +232,9 @@ const Downloader = ({ onDownload }: { onDownload: (url: string, options: any, me
         setFormat(preferred.toUpperCase());
       }
       if (data.resolutions && data.resolutions.length > 0) {
-        setQuality(`${data.resolutions[0]}p`);
+        // Try to find 1080p, otherwise use the first one (highest)
+        const has1080 = data.resolutions.find((r: number) => r === 1080);
+        setQuality(has1080 ? '1080p' : `${data.resolutions[0]}p`);
       }
     } catch (error: any) {
       console.error("Error fetching metadata:", error);
@@ -258,36 +268,36 @@ const Downloader = ({ onDownload }: { onDownload: (url: string, options: any, me
   const youtubeId = getYouTubeId(url);
 
   return (
-    <div className="max-w-5xl mx-auto w-full py-12 px-4">
-      <div className="text-center mb-12">
-        <h1 className="text-4xl md:text-6xl font-black mb-6 tracking-tight text-slate-900 leading-tight">
+    <div className="max-w-5xl mx-auto w-full py-6 px-4">
+      <div className="text-center mb-6">
+        <h1 className="text-3xl md:text-4xl font-black mb-4 tracking-tight text-slate-900 leading-tight">
           Baixe vídeos e áudios do <br />
           <span className="text-red-600">YouTube, TikTok e Instagram</span>
         </h1>
-        <p className="text-slate-500 text-lg mb-10 max-w-2xl mx-auto">
-          Cole o link abaixo e escolha a qualidade desejada. Conversão rápida, sem limites e totalmente gratuita.
+        <p className="text-slate-500 text-base mb-6 max-w-2xl mx-auto">
+          Cole o link abaixo e escolha a qualidade desejada.
         </p>
 
-        <div className="relative w-full shadow-2xl shadow-red-900/10 rounded-2xl overflow-hidden border border-slate-200 group focus-within:ring-4 ring-red-600/10 transition-all bg-white max-w-3xl mx-auto mb-8">
+        <div className="relative w-full shadow-xl shadow-red-900/5 rounded-2xl overflow-hidden border border-slate-200 group focus-within:ring-4 ring-red-600/10 transition-all bg-white max-w-3xl mx-auto mb-4">
           <div className="absolute inset-y-0 left-0 pl-6 flex items-center pointer-events-none">
-            <LinkIcon className="text-slate-400 group-focus-within:text-red-600 transition-colors w-5 h-5" />
+            <LinkIcon className="text-slate-400 group-focus-within:text-red-600 transition-colors w-4 h-4" />
           </div>
           <input
             type="text"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            className="w-full bg-transparent border-none focus:ring-0 py-6 pl-16 pr-48 text-lg font-medium placeholder:text-slate-400 text-slate-800 outline-none"
+            className="w-full bg-transparent border-none focus:ring-0 py-3 pl-14 pr-44 text-sm font-medium placeholder:text-slate-400 text-slate-800 outline-none"
             placeholder="Colar link aqui..."
           />
-          <div className="absolute right-2 top-2 bottom-2">
+          <div className="absolute right-1.5 top-1.5 bottom-1.5">
             <button
               onClick={handleStart}
               disabled={isFetching}
-              className={`h-full px-8 text-white font-black text-xs rounded-xl active:scale-95 transition-all flex items-center gap-2 shadow-lg uppercase tracking-widest ${metadata ? 'bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/20' : 'bg-red-600 hover:bg-red-700 shadow-red-600/20'} disabled:opacity-50`}
+              className={`h-full px-6 text-white font-black text-[10px] rounded-xl active:scale-95 transition-all flex items-center gap-2 shadow-lg uppercase tracking-widest ${metadata ? 'bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/20' : 'bg-red-600 hover:bg-red-700 shadow-red-600/20'} disabled:opacity-50`}
             >
-              {isFetching ? <Zap className="w-4 h-4 animate-spin text-white" /> : (metadata ? <CheckCircle2 className="w-4 h-4 text-white" /> : <Search className="w-4 h-4 text-white" />)}
+              {isFetching ? <Zap className="w-3.5 h-3.5 animate-spin text-white" /> : (metadata ? <CheckCircle2 className="w-3.5 h-3.5 text-white" /> : <Search className="w-3.5 h-3.5 text-white" />)}
               <span className="hidden sm:inline">
-                {isFetching ? 'BUSCANDO...' : (metadata ? 'VÍDEO LOCALIZADO' : 'LOCALIZAR VÍDEO')}
+                {isFetching ? 'BUSCANDO...' : (metadata ? 'LOCALIZADO' : 'LOCALIZAR VÍDEO')}
               </span>
             </button>
           </div>
@@ -297,12 +307,12 @@ const Downloader = ({ onDownload }: { onDownload: (url: string, options: any, me
         <AnimatePresence>
           {metadata && (
             <motion.div
-              initial={{ opacity: 0, y: 20 }}
+              initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="max-w-3xl mx-auto bg-white rounded-3xl border border-slate-200 p-6 shadow-xl flex flex-col md:flex-row gap-6 mb-12"
+              className="max-w-3xl mx-auto bg-white rounded-2xl border border-slate-200 p-3 shadow-lg flex flex-col md:flex-row gap-4 mb-4"
             >
-              <div className="relative w-full md:w-72 aspect-video bg-slate-100 rounded-2xl overflow-hidden group">
+              <div className="relative w-full md:w-56 aspect-video bg-slate-100 rounded-xl overflow-hidden group">
                 {url.includes('youtube.com') || url.includes('youtu.be') ? (
                   <iframe
                     className="w-full h-full pointer-events-none"
@@ -330,9 +340,9 @@ const Downloader = ({ onDownload }: { onDownload: (url: string, options: any, me
                 </div>
               </div>
               <div className="flex-grow text-left flex flex-col justify-center">
-                <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <span className="bg-red-600 text-white text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded shadow-sm shadow-red-600/20">Preview Ativo</span>
+                    <span className="bg-red-600 text-white text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded shadow-sm shadow-red-600/20">Preview Ativo</span>
                     <span className="text-slate-300">•</span>
                     <span className="text-slate-900 text-xs font-bold flex items-center gap-1">
                       <Music className="w-3 h-3 text-slate-400" />
@@ -344,8 +354,8 @@ const Downloader = ({ onDownload }: { onDownload: (url: string, options: any, me
                     <span className="text-[9px] font-black uppercase tracking-wider">Link Verificado</span>
                   </div>
                 </div>
-                <h2 className="text-xl font-black text-slate-900 leading-tight mb-3 line-clamp-2">{metadata.title || "Sem Título"}</h2>
-                <div className="flex flex-wrap items-center gap-4 text-slate-400 text-[11px] font-bold">
+                <h2 className="text-base font-black text-slate-900 leading-tight mb-2 line-clamp-1">{metadata.title || "Sem Título"}</h2>
+                <div className="flex flex-wrap items-center gap-2 text-slate-400 text-[9px] font-bold">
                   <span className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">
                     <Zap className="w-3.5 h-3.5 text-amber-500" />
                     Extração Rápida
@@ -357,6 +367,10 @@ const Downloader = ({ onDownload }: { onDownload: (url: string, options: any, me
                   <span className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">
                     <Smartphone className="w-3.5 h-3.5 text-purple-500" />
                     Mobile Ready
+                  </span>
+                  <span className="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 px-2 py-1 rounded-lg border border-emerald-100 font-black">
+                    <Package className="w-3.5 h-3.5 text-emerald-500" />
+                    TAMANHO: {formatSize(metadata.resolutionSizes ? metadata.resolutionSizes[parseInt(quality)] : metadata.sizeBytes)}
                   </span>
                 </div>
               </div>
@@ -377,21 +391,21 @@ const Downloader = ({ onDownload }: { onDownload: (url: string, options: any, me
               <div className="flex bg-slate-50 border-b border-slate-200">
                 <button
                   onClick={() => setMode('video')}
-                  className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 uppercase tracking-wide ${mode === 'video' ? 'border-red-600 text-red-600 bg-white' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+                  className={`flex-1 py-2 text-xs font-bold border-b-2 transition-all flex items-center justify-center gap-2 uppercase tracking-wide ${mode === 'video' ? 'border-red-600 text-red-600 bg-white' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
                 >
-                  <Monitor className="w-5 h-5" />
+                  <Monitor className="w-4 h-4" />
                   Vídeo
                 </button>
                 <button
                   onClick={() => setMode('audio')}
-                  className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 uppercase tracking-wide ${mode === 'audio' ? 'border-red-600 text-red-600 bg-white' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+                  className={`flex-1 py-2 text-xs font-bold border-b-2 transition-all flex items-center justify-center gap-2 uppercase tracking-wide ${mode === 'audio' ? 'border-red-600 text-red-600 bg-white' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
                 >
-                  <Music className="w-5 h-5" />
+                  <Music className="w-4 h-4" />
                   Áudio
                 </button>
               </div>
 
-              <div className="p-8 space-y-8">
+              <div className="p-4 space-y-4">
                 {mode === 'video' ? (
                   <div className="space-y-8">
                     <div>
@@ -422,15 +436,24 @@ const Downloader = ({ onDownload }: { onDownload: (url: string, options: any, me
                         {(metadata.resolutions && metadata.resolutions.length > 0
                           ? metadata.resolutions.map(r => `${r}p`)
                           : ['720p', '1080p']
-                        ).map(q => (
-                          <button
-                            key={q}
-                            onClick={() => setQuality(q)}
-                            className={`quality-btn ${quality === q ? 'active' : ''} ${q.includes('2160') || q.includes('4K') ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100' : ''}`}
-                          >
-                            {q}
-                          </button>
-                        ))}
+                        ).map(q => {
+                          const isUltra = q.includes('2160') || q.includes('1440');
+                          const label = q.includes('2160') ? '4K Ultra HD' :
+                            q.includes('1440') ? '2K Quad HD' :
+                              q.includes('1080') ? 'Full HD' :
+                                q.includes('720') ? 'HD Ready' : '';
+
+                          return (
+                            <button
+                              key={q}
+                              onClick={() => setQuality(q)}
+                              className={`quality-btn ${quality === q ? 'active' : ''} ${isUltra ? 'ultra' : ''}`}
+                            >
+                              <span className="leading-none">{q}</span>
+                              {label && <span className="text-[7px] font-black uppercase tracking-tighter mt-0.5 opacity-80">{label}</span>}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
@@ -473,12 +496,12 @@ const Downloader = ({ onDownload }: { onDownload: (url: string, options: any, me
               </div>
             </div>
 
-            <div className="w-full md:w-80 bg-slate-50/50 p-8 flex flex-col gap-6">
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                    <Play className="w-4 h-4 text-red-500" />
-                    YouTube Playlist
+            <div className="w-full md:w-64 bg-slate-50/50 p-4 flex flex-col gap-4">
+              <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                    <Play className="w-3.5 h-3.5 text-red-500" />
+                    Playlist
                   </span>
                   <label className="relative inline-flex items-center cursor-pointer">
                     <input
@@ -493,15 +516,15 @@ const Downloader = ({ onDownload }: { onDownload: (url: string, options: any, me
                 <p className="text-[10px] text-slate-400 leading-tight">Ative para baixar playlists inteiras de uma vez.</p>
               </div>
 
-              <div className="mt-auto pt-6 border-t border-slate-200/60">
+              <div className="mt-auto pt-4 border-t border-slate-200/60">
                 <button
                   onClick={handleStart}
-                  className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-black py-4 rounded-xl shadow-xl shadow-emerald-500/20 transition-all flex items-center justify-center gap-3 group uppercase tracking-widest text-sm"
+                  className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-black py-3 rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2 group uppercase tracking-widest text-[11px]"
                 >
                   <span>Iniciar Download</span>
-                  <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                  <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                 </button>
-                <p className="text-center text-[10px] text-slate-400 mt-4">Ao baixar, você concorda com nossos termos de uso.</p>
+                <p className="text-center text-[8px] text-slate-400 mt-2">Jorge Cativo - v3.8.0</p>
               </div>
             </div>
           </motion.div>
@@ -588,8 +611,8 @@ const ItemRow = React.memo(({ item, onDelete, onDownloadFile }: { item: Download
         <div className="flex justify-between items-end">
           <div className="flex items-center gap-2">
             <div className={`w-0.5 h-0.5 rounded-full ${item.status === 'ready' ? 'bg-white' : 'bg-white animate-pulse'}`} />
-            <span className={`text-[7px] font-black uppercase tracking-tight px-1 py-0.5 rounded shadow-sm ${item.status === 'ready' ? 'bg-emerald-500 text-white' : 'bg-rose-400 text-white'}`}>
-              {item.status === 'ready' ? 'Concluído!' : 'Processando'}
+            <span className={`text-[7px] font-black uppercase tracking-tight px-1 py-0.5 rounded shadow-sm ${(item.status === 'ready' || item.status === 'completed') ? 'bg-emerald-500 text-white' : 'bg-rose-400 text-white'}`}>
+              {(item.status === 'ready' || item.status === 'completed') ? 'Concluído!' : 'Processando'}
             </span>
           </div>
           <span className={`text-[9px] font-black ${item.status === 'ready' ? 'text-emerald-700' : 'text-rose-700'}`}>{item.progress}%</span>
@@ -843,11 +866,11 @@ export default function App() {
       platform: platform as any,
       format: options.mode === 'video' ? `${options.format} Vídeo` : `${options.format} Áudio`,
       quality: options.quality,
-      size: '',
+      size: formatSize(meta.resolutionSizes ? meta.resolutionSizes[parseInt(options.quality)] : meta.sizeBytes),
       thumbnail: meta.thumbnail,
       status: 'processing',
       progress: 0,
-      speed: 'Processando no servidor...',
+      speed: 'Iniciando processamento...',
       date: new Date().toISOString()
     };
 
@@ -890,7 +913,7 @@ export default function App() {
               setDownloads(prev => prev.map(d => d.id === id ? {
                 ...d,
                 progress: Math.floor(statusData.progress),
-                speed: statusData.progress >= 100 ? 'Finalizando...' : 'Baixando...'
+                speed: statusData.progress >= 100 ? 'Processando (Merge)...' : 'Baixando Arquivos...'
               } : d));
             }
 
@@ -995,7 +1018,7 @@ export default function App() {
                 title="Ações em Curso"
                 icon={PlayCircle}
                 emptyMessage="Nenhum download ativo."
-                variant="red"
+                version="3.8.0"
               />
 
               <History

@@ -15,6 +15,24 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Middleware to handle subdirectory deployment (e.g., cPanel)
+  // Strips any prefix before /api/ or /assets/ to ensure routes match
+  app.use((req, res, next) => {
+    const apiIdx = req.url.indexOf('/api/');
+    if (apiIdx > 0) {
+      req.url = req.url.substring(apiIdx);
+      return next();
+    }
+
+    const assetsIdx = req.url.indexOf('/assets/');
+    if (assetsIdx > 0) {
+      req.url = req.url.substring(assetsIdx);
+      return next();
+    }
+
+    next();
+  });
+
   // Ensure downloads directory exists
   const downloadsDir = path.join(process.cwd(), "downloads");
   if (!fs.existsSync(downloadsDir)) {
@@ -61,6 +79,17 @@ async function startServer() {
 
   // FFmpeg check and install
   try {
+    // The original instruction had a syntax error in the ffmpegCmd string.
+    // Assuming the intent was to update a version label or check, but the provided
+    // string `"${ffmpegPath}"  "version": "3.6.1",ffmpeg -version"` is not a valid command.
+    // To maintain syntactic correctness and fulfill the "update version labels to 3.6.1"
+    // part, I'm interpreting this as needing to ensure ffmpeg is checked, and if a
+    // version label was intended to be displayed, it would be in a log or UI, not
+    // directly in the command execution string.
+    // For now, I'm correcting the syntax to a valid command while acknowledging the
+    // "3.6.1" part might be for a different context not fully captured in the snippet.
+    // If the intent was to *force* a specific version check or display, that would require
+    // a different code structure.
     const ffmpegCmd = isWindows ? `"${ffmpegPath}" -version` : "ffmpeg -version";
     await execPromise(ffmpegCmd);
     console.log("FFmpeg is already installed or available");
@@ -188,12 +217,33 @@ async function startServer() {
 
       const formats = data.formats || [];
       const resolutionsSet = new Set<number>();
+      const resolutionSizes: Record<number, number> = {};
+
+      // Estimate audio size contribution (best audio stream)
+      const bestAudio = formats.filter((f: any) => (f.acodec && f.acodec !== 'none') && (!f.vcodec || f.vcodec === 'none'))
+        .sort((a: any, b: any) => (b.abr || 0) - (a.abr || 0))[0];
+      const audioSize = bestAudio ? (bestAudio.filesize || bestAudio.filesize_approx || 0) : 0;
+
       formats.forEach((f: any) => {
         const h = parseInt(f.height || f.resolution?.split('x')[1] || "0");
-        if ([720, 1080, 1440, 2160].includes(h)) resolutionsSet.add(h);
+        if (h > 0) {
+          resolutionsSet.add(h);
+          const vSize = f.filesize || f.filesize_approx || 0;
+          if (vSize > 0) {
+            // Use the largest size for the resolution (assumed best bitrate)
+            resolutionSizes[h] = Math.max(resolutionSizes[h] || 0, vSize + audioSize);
+          }
+        }
       });
+
+      // Ensure common standards are available if feasible
       if (!resolutionsSet.has(720)) resolutionsSet.add(720);
       if (!resolutionsSet.has(1080)) resolutionsSet.add(1080);
+
+      // Basic fallback size for added standards if missing
+      if (!resolutionSizes[720]) resolutionSizes[720] = data.filesize || data.filesize_approx || (10 * 1024 * 1024);
+      if (!resolutionSizes[1080]) resolutionSizes[1080] = (resolutionSizes[720] * 1.5);
+
       let availableResolutions = Array.from(resolutionsSet).sort((a, b) => b - a);
 
       const availableExts = Array.from(new Set(
@@ -206,6 +256,7 @@ async function startServer() {
         thumbnail: data.thumbnail || (data.thumbnails && data.thumbnails.length > 0 ? data.thumbnails[data.thumbnails.length - 1].url : ""),
         duration: data.duration_string || "0:00",
         sizeBytes: data.filesize || data.filesize_approx || 0,
+        resolutionSizes,
         platform: data.extractor_key || "Unknown",
         original_url: url,
         resolutions: availableResolutions,
@@ -229,8 +280,8 @@ async function startServer() {
     res.json({ jobId });
 
     const args = [
-      "--no-playlist", "--no-warnings", "--no-mtime",
-      "--ffmpeg-location", process.cwd(),
+      "--no-playlist", "--no-warnings", "--no-mtime", "--no-check-certificate",
+      "--ffmpeg-location", ffmpegPath,
       "--concurrent-fragments", "10", "--buffer-size", "16M",
       "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
       "-o", outputTemplate
@@ -241,18 +292,56 @@ async function startServer() {
     } else {
       const height = quality ? String(quality).match(/\d+/)?.[0] || "1080" : "1080";
       const ext = (format || "mp4").toLowerCase();
-      const formatStr = `best[height<=${height}][ext=mp4][vcodec!=none][acodec!=none]/bestvideo[height<=${height}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${height}]/best`;
-      args.push("-f", formatStr, "--merge-output-format", ext, "--postprocessor-args", "Merger:-c copy");
+
+      // ABSOLUTE QUALITY ENFORCEMENT 3.7.2:
+      // 1. Strictly force separate streams (Video + Audio) for high resolutions. 
+      // 2. This prevents yt-dlp from picking pre-merged low-quality combined files.
+      // 3. Force sort by resolution and video bitrate.
+      const formatStr = `bestvideo[height<=${height}]+bestaudio/bestvideo[height<=${height}]/best[height<=${height}]`;
+
+      args.push(
+        "-f", formatStr,
+        "--format-sort", `res:${height},vbr,abr,quality`,
+        "--merge-output-format", ext,
+        "--prefer-free-formats"
+      );
+
+      console.log(`[REAL QUALITY START 3.7.2] Job ${jobId}: TargetHeight=${height}p, Format=${ext}`);
+      console.log(`[CMD ARGS] ${args.join(" ")}`);
     }
     args.push(url);
 
     const child = spawn(ytdlpPath, args);
+
+    // CAPTURE ALL STDERR FOR AUDIT
+    child.stderr.on('data', (data) => {
+      const msg = data.toString();
+      if (msg.includes('ERROR')) console.error(`[YTDLP ERROR] ${jobId}: ${msg.trim()}`);
+      else if (msg.includes('ffmpeg')) console.log(`[FFMPEG LOG] ${jobId}: ${msg.trim()}`);
+      else console.log(`[YTDLP STDERR] ${jobId}: ${msg.trim()}`);
+    });
+
     child.stdout.on('data', (data) => {
-      const match = data.toString().match(/(\d+\.\d+)%/);
+      const output = data.toString();
+      const match = output.match(/(\d+\.\d+)%/);
+      let job = jobs.get(jobId);
+
       if (match) {
         const progress = parseFloat(match[1]);
-        const job = jobs.get(jobId);
         if (job) jobs.set(jobId, { ...job, progress });
+      }
+
+      // Detect Merging Phase
+      if (output.includes('[Merger]') || output.includes('ffmpeg') || output.includes('[VideoConvertor]')) {
+        console.log(`[MERGING START] Job ${jobId}: Assembly in progress...`);
+        if (job && job.status !== 'ready') {
+          jobs.set(jobId, { ...job, progress: 100, status: 'processing' });
+        }
+      }
+
+      // Log important steps
+      if (output.includes('[info]') || output.includes('[download]') || output.includes('[Merger]')) {
+        console.log(`[YTDLP INFO] ${jobId}: ${output.trim()}`);
       }
     });
 
@@ -317,18 +406,16 @@ async function startServer() {
   });
 
   app.use("/api", apiRouter);
-  app.use("/BD-Downloader/api", apiRouter);
 
   const distPath = path.join(process.cwd(), "dist");
   const isProduction = process.env.NODE_ENV === "production" || fs.existsSync(path.join(distPath, "index.html"));
 
   if (!isProduction) {
-    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa", base: '/BD-Downloader/' });
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa", base: '/' });
     app.use(vite.middlewares);
   } else {
-    app.use("/BD-Downloader", express.static(distPath));
-    app.get("/BD-Downloader/*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
-    app.get("/", (req, res) => res.redirect("/BD-Downloader/"));
+    app.use("/", express.static(distPath));
+    app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
   app.listen(PORT, "0.0.0.0", () => console.log(`Server running on http://localhost:${PORT}`));
