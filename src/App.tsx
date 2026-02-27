@@ -162,7 +162,7 @@ const Navbar = ({ onOpenSidebar, hasHistory }: { onOpenSidebar: () => void, hasH
           <span className="text-lg font-black tracking-tight text-slate-900 leading-none">BD Downloader</span>
           <div className="flex items-center gap-2">
             <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Versão Paga</span>
-            <span className="text-[9px] font-black text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded">v3.8.0</span>
+            <span className="text-[9px] font-black text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded">v3.8.1</span>
           </div>
         </div>
       </div>
@@ -524,7 +524,7 @@ const Downloader = ({ onDownload }: { onDownload: (url: string, options: any, me
                   <span>Iniciar Download</span>
                   <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                 </button>
-                <p className="text-center text-[8px] text-slate-400 mt-2">Jorge Cativo - v3.8.0</p>
+                <p className="text-center text-[8px] text-slate-400 mt-2">Jorge Cativo - v3.8.1</p>
               </div>
             </div>
           </motion.div>

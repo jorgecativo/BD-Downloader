@@ -280,12 +280,14 @@ async function startServer() {
   app.use("/api", apiRouter);
 
   const distPath = path.join(process.cwd(), "dist");
-  const isProduction = process.env.NODE_ENV === "production" || fs.existsSync(path.join(distPath, "index.html"));
+  const isProduction = process.env.NODE_ENV === "production";
 
   if (!isProduction) {
+    console.log("Starting in DEVELOPMENT mode (Vite)");
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa", base: '/' });
     app.use(vite.middlewares);
   } else {
+    console.log("Starting in PRODUCTION mode");
     app.use("/", express.static(distPath));
     app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
